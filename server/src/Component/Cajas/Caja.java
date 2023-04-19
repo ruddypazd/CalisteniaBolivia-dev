@@ -11,9 +11,6 @@ import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import com.google.zxing.Result;
-import com.mysql.cj.protocol.Resultset;
-
 import Component.Sucursales.Sucursal;
 import Component.Sucursales.SucursalTipoPagoCuentaBanco;
 import Server.SSSAbstract.SSServerAbstract;
@@ -21,6 +18,7 @@ import Server.SSSAbstract.SSSessionAbstract;
 import Servisofts.SConfig;
 import Servisofts.SPGConect;
 import Servisofts.SUtil;
+import SocketCliente.SocketCliente;
 
 public class Caja {
 
@@ -55,6 +53,9 @@ public class Caja {
             case "editar":
                 editar(data, session);
             break;
+            case "asiento":
+                asiento(data, session);
+            break;
             case "subirFoto":
                 subirFoto(data, session);
             break;
@@ -67,6 +68,14 @@ public class Caja {
             JSONObject data = SPGConect.ejecutarConsultaObject(consulta);
             obj.put("data", data);
             obj.put("estado", "exito");
+        } catch (SQLException e) {
+            obj.put("estado", "error");
+            e.printStackTrace();
+        }
+    }
+    public void asiento(JSONObject obj, SSSessionAbstract session) {
+        try {
+            obj = this.asientoContable(obj.getString("key_caja"));
         } catch (SQLException e) {
             obj.put("estado", "error");
             e.printStackTrace();
@@ -337,6 +346,8 @@ public class Caja {
                 }
             }
 
+            this.asientoContable(caja.getString("key"));
+
             obj.put("data", caja);
             obj.put("estado", "exito");
 
@@ -488,4 +499,76 @@ public class Caja {
             return null;
         }
     }
+    public JSONObject asientoContable(String key_caja) throws SQLException{
+        JSONObject caja = this.getByKey(key_caja);
+        caja = caja.getJSONObject(JSONObject.getNames(caja)[0]);
+        JSONObject ventas = SPGConect.ejecutarConsultaObject("select get_ventas_caja('"+key_caja+"') as json");
+
+        //JSONObject usuarios = SocketCliente.sendSinc("usuario", ventas);
+
+        JSONObject asientoContable = new JSONObject();
+        asientoContable.put("tipo", "ingreso");
+        asientoContable.put("fecha", "2022-01-30");
+        asientoContable.put("observacion", "Sucursal");
+        asientoContable.put("descripcion", "El nombre del cajero");
+
+        JSONArray detalle = new JSONArray();
+        JSONObject objDetalle;
+
+        JSONObject venta;
+        float totalVenta=0;
+        // ventas a los clientes
+        for (int i = 0; i < JSONObject.getNames(ventas).length; i++) {
+            venta = ventas.getJSONObject(JSONObject.getNames(ventas)[i]);
+            objDetalle = new JSONObject();
+            objDetalle.put("codigo", "4010101004");
+            objDetalle.put("glosa", "compra del cliente "+venta.getString("key_cliente"));
+            objDetalle.put("haber",venta.getFloat("monto")*0.87);
+            totalVenta+=venta.getFloat("monto");
+            detalle.put(objDetalle);
+        }
+
+        //IVA de las ventas anteriores
+        objDetalle = new JSONObject();
+        objDetalle.put("codigo", "2010201001");
+        objDetalle.put("glosa", "Iva de las ventas anteriores");
+        objDetalle.put("haber",totalVenta*0.13);
+        detalle.put(objDetalle);
+
+        //IT de las ventas anteriores
+        objDetalle = new JSONObject();
+        objDetalle.put("codigo", "2010201002");
+        objDetalle.put("glosa", "It de las ventas anteriores");
+        objDetalle.put("haber",totalVenta*0.03);
+        detalle.put(objDetalle);
+
+
+
+        //envio a bancos el total de lo recaudado
+        objDetalle = new JSONObject();
+        objDetalle.put("codigo", "1010102003");
+        objDetalle.put("glosa", "Registro de las transacciones");
+        objDetalle.put("debe",totalVenta);
+        detalle.put(objDetalle);
+
+        //IT del total de lo recaudado
+        objDetalle = new JSONObject();
+        objDetalle.put("codigo", "1010102003");
+        objDetalle.put("glosa", "IT de lo recaudado");
+        objDetalle.put("debe",totalVenta*0.03);
+        detalle.put(objDetalle);
+
+        asientoContable.put("detalle", detalle);
+
+        JSONObject send = new JSONObject();
+        send.put("component", "asiento_contable");
+        send.put("type", "set");
+        send.put("key_empresa", "4087c96d-2da7-420f-aba2-e0def2ad6853");
+        send.put("key_usuario", caja.getString("key_usuario"));
+        send.put("data", asientoContable);
+
+        JSONObject obj = SocketCliente.sendSinc("contabilidad", send);
+        if(obj.has("error")) System.out.println(obj.getString("error"));
+        return obj;
+    } 
 }
